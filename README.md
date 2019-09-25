@@ -17,7 +17,9 @@ Bash script that monitor TLS endpoints and sends email if Letsencrypt certs are 
 
 ## Email setup
 
-To have `mail` deliver email to a remote SMTP server such as Gmail, configure an MTA. OpenSMTPD is simple: 
+To have email delivered to a remote SMTP server such as Gmail, configure an MTA such as Postfix or Exim. 
+
+OpenSMTPD is simple. 
 
 Install it: 
 
@@ -25,32 +27,28 @@ Install it:
     $ yum install opensmtpd mailx        # Config in /etc/opensmtpd/smtpd.conf
     $ apt install opensmtpd mailutils    # Config in /etc/smtpd.conf
 
-Configure: 
-
-- Forward all email to foo@example.com
+Configure Email: foo@example.com, Server: smtp.example.com:587, Password: PASSWORD):
 
     $ mkdir -p /etc/smtpd
-
+    
     $ cat /etc/smtpd/aliases
     @ foo@example.com
-
-- Configure 
-
+    
     $ cat smtpd.conf
     listen on localhost
     
     table aliases file:/etc/smtpd/aliases
     table secrets file:/etc/smtpd/secrets
     
-    accept from local for any relay via secure+auth://<USERNAME>@<DOMAIN> auth <secrets> as "root@<HOSTNAME>"
+    accept from local for any relay via secure+auth://lemonitor@smtp.example.com:587 auth <secrets> as "root@lemonitor"
 
     $ cat /etc/smtpd/secrets
-    <USERNAME>      <SMTP_SUBMISSION_USER>@<DOMAIN>:<PASSWORD>
+    lemonitor      foo@example.com:PASSWORD
 
     $ systemctl enable smtpd --now
     $ smtpctl monitor
 
-- Test
+Replace as needed, and test
 
     $ echo "Email body" | mailx -s "Email subject" foo@example.com
 
