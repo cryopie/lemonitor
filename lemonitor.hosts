@@ -1,0 +1,17 @@
+### README
+# This is a file with a list of <host>[:<port], one per line, where TLS endpoints exist
+# Lines starting with '#' or with whitespaces are ignored
+
+# HTTPS
+example.com
+www.example.com
+
+# Email servers (non-StartTLS)
+mail.example.com:587
+mail.example.com:993
+
+# SIPS 
+sip.example.com:5061
+
+# LDAPS
+ldap.example.com:636

@@ -1,0 +1,140 @@
+#!/bin/bash
+### README: Checks expiry of TLS certs (e.g., Letsencrypt). Optionally send email.
+### Reads /etc/lemonitor.conf
+
+CONF_FILE="/etc/lemonitor.conf"
+# $CONF_FILE must be in bash with the following variables
+# EMAIL_TO=foo@example.com        # Destination email (sent to local MTA)
+# EXPIRY_THRESHOLD=14             # Send email if a cert expires in less than this
+# HOSTS_FILE=/etc/lemonitor.hosts # A mapping of hosts
+# NETWORK_ERROR_NUMBER=-41414141  # Bad Network: Expiry is set to this if network is bad
+# BAD_CONN_IS_CRITICAL=0          # Bad Network: Is bad network considered critical (send email?)
+ 
+NC=$(tput sgr0)
+BOLD=$(tput bold)
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+
+function die() { printf "$1\n"; exit 1; }
+function usage() {
+printf "Usage: $0 <option>\nwhere <option> is:
+    <host>[:<port>] : Show expiry of <host>[:<port>] on stdout.
+    -f <file>       : Show expiry domains from <file> on stdout.
+    -m <file>       : Monitor domains from <file> and send email if EXPIRY_THRESHOLD (=$EXPIRY_THRESHOLD days) is reached.
+
+This script uses 'openssl s_client' to show certificate expity of hosts.
+
+* <file> contains a list of <host>[:port] entries one-per-line. Empty lines and lines starting with '#' are ignored
+* Default <file> is $HOSTS_FILE. Default <port> is 443.
+* On network or TLS error, it returns $NETWORK_ERROR_NUMBER and sends email if BAD_CONN_IS_CRITICAL is 1 (it is $BAD_CONN_IS_CRITICAL at the moment)
+";
+exit 0
+}
+
+[ $# -gt 0 ] || usage
+[ -x "$(command -v openssl)" ] || die "Error: 'openssl' not found"
+
+if [ ! -f $CONF_FILE ]; then
+    die "Configuration file $CONF_FILE not found"
+fi
+
+. $CONF_FILE
+
+email=0
+today=$(date +"%b %d %T %Y %Z")
+today_epoch=$(date '+%s')
+
+function date_diff() {
+    # Input: date in format %b %d %T %Y %Z. e.g., Mar 15 13:34:23 2019 EDT. Output: how many days from today. 
+    date_epoch=$(date --date="$1" '+%s')
+    diff_days=$(( (date_epoch - today_epoch) / 86400 ))
+    echo "$diff_days"
+}
+
+function check_domain() {
+    # Input: <host>[:<port>]. Output: expiry in days
+    host_port="$1"
+    if [[ ! $host_port == *":"* ]]; then
+        host_port=$host_port:443
+    fi
+    host=${host_port%%:*}
+    port=${host_port##*:}
+    cert=$(echo | openssl s_client -showcerts -connect $host:$port -servername $host 2>/dev/null | openssl x509 -text -noout 2>/dev/null) 
+    not_after=$(echo "$cert" | grep "Not After" | sed 's@.*Not After : \(.*\)@\1@g')
+    if [ -z "$not_after" ]; then
+        expiry_in_days="$NETWORK_ERROR_NUMBER"
+    else
+        expiry_in_days=$(date_diff "$not_after")
+    fi
+    echo "$expiry_in_days"
+}
+
+function do_multiple() {
+    if [ ! -z $1 ]; then 
+        HOSTS_FILE=$1
+    fi
+    if [ ! -f $HOSTS_FILE ]; then
+        die "Hosts file $HOSTS_FILE not found"
+    fi
+    count=0
+    found_critical=0
+    email_content=""
+    stdout_content=""
+    lines=$(cat $HOSTS_FILE)
+    while read line
+    do 
+        if [[ "$line" == \#* ]] || [[ -z "${line// }" ]] ; then
+            # Starts with a # or is empty/whitespace
+            continue
+        fi
+        expiry=$(check_domain "$line")
+        col="$GREEN"
+        if [[ "$expiry" -eq "$NETWORK_ERROR_NUMBER" ]]; then
+            col=$BOLD$YELLOW
+            if [[ $BAD_CONN_IS_CRITICAL -eq 1 ]]; then
+                col=$BOLD$RED
+                found_critical=1
+                email_content+="Domain $line: Network or TLS error (bad connection)\\n"
+            fi
+            stdout_content+=$(echo -n "${col}$line${NC}" '@' "" '@' "${col}Bad Connection${NC}" '@' "\n")
+        else
+            if [[ "$expiry" -lt "$EXPIRY_THRESHOLD" ]]; then
+                col=$BOLD$RED
+                found_critical=1
+                email_content+="Domain $line expires in $expiry days\\n"
+            fi
+            stdout_content+=$(echo -n "${col}$line${NC}" '@' "expires in" '@' "${col}$expiry${NC} days" '@' "\n")
+        fi
+    done <<< "$lines"
+    # '<<<' makes the while loop a 'here string' instead of a subshell. Otherwise variables within while loop are lost.
+    # https://stackoverflow.com/questions/16854280/a-variable-modified-inside-a-while-loop-is-not-remembered
+    if [[ $email -eq 0 ]]; then
+        echo -e "$stdout_content" | column -t -s '@'
+    else
+        if [[ $found_critical -eq 1 ]]; then
+            [ -x "$(command -v mail)" ] || die "Bad certificates found. Error: command 'mail' not found. Email not sent."
+            echo -e "$email_content" | mail -s "lemonitor warning: Letsencrypt Certificate Expiry" "$EMAIL_TO"
+            echo "lemonitor: Bad certificates found. Email sent"
+        else
+            echo "lemonitor: All Certificates OK"
+        fi
+    fi
+}
+
+function do_single() {
+    expiry=$(check_domain "$1")
+    echo "Domain $1 expires in $expiry days"
+}
+
+OPTIND=1
+while getopts "mf" opt; do
+    case "$opt" in
+        m) email=1 && do_multiple $2 ;;
+        f) email=0 && do_multiple $2 ;;
+        *) usage ;;
+    esac
+    exit 0
+done
+
+do_single "$1"

@@ -1,0 +1,7 @@
+[Unit]
+Description=Let's Encrypt certificate monitor
+
+[Service]
+Type=oneshot
+User=nobody
+ExecStart=/opt/lemonitor/lemonitor -m
